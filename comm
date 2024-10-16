@@ -19,3 +19,21 @@ At line:1 char:13
     + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod], WebExc
    eption
     + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
+# URL and headers
+$url = "https://api.company.com/user" # Replace with actual URL
+$headers = @{
+    Authorization = "Bearer YOUR_SAML_ASSERTION" # Replace with actual SAML assertion
+    "Content-Type" = "application/json"
+    Accept = "application/json"
+}
+
+# Set the server certificate validation callback (optional, for testing only)
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+
+# Make the request with verbose output
+try {
+    $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get -Verbose
+    $response
+} catch {
+    Write-Error "An error occurred: $_"
+}
