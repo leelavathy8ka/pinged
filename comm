@@ -10,3 +10,5 @@ $response = Invoke-RestMethod -Uri $url -Headers @{Authorization = "Bearer $saml
 
 # Display the response
 $response
+$response = Invoke-RestMethod -Uri $url -Headers @{Authorization = "Bearer $samlAssertion"} -Method Get -Verbose
+
