@@ -37,3 +37,13 @@ try {
 } catch {
     Write-Error "An error occurred: $_"
 }
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+# Make the request with verbose output
+try {
+    $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get -Verbose
+    $response
+} catch {
+    Write-Error "An error occurred: $_"
+} : An error occurred: The underlying connection was closed: An unexpected error occurred on a send.
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException
