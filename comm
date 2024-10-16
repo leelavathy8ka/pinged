@@ -12,3 +12,10 @@ $response = Invoke-RestMethod -Uri $url -Headers @{Authorization = "Bearer $saml
 $response
 $response = Invoke-RestMethod -Uri $url -Headers @{Authorization = "Bearer $samlAssertion"} -Method Get -Verbose
 
+Invoke-RestMethod : The remote server returned an error: (401) Unauthorized.
+At line:1 char:13
++ $response = Invoke-RestMethod -Uri $url -Headers @{Authorization = "B ...
++             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod], WebExc
+   eption
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
