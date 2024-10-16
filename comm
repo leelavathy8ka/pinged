@@ -47,3 +47,24 @@ try {
 } : An error occurred: The underlying connection was closed: An unexpected error occurred on a send.
     + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
     + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException
+# Configure TLS protocol
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+# (Optional) Ignore SSL certificate validation (for testing only)
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+
+# URL and headers
+$url = "https://api.company.com/user" # Replace with the actual URL
+$headers = @{
+    Authorization = "Bearer YOUR_SAML_ASSERTION" # Replace with the actual SAML assertion
+    "Content-Type" = "application/json"
+    Accept = "application/json"
+}
+
+# Make the request with verbose output
+try {
+    $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get -Verbose
+    $response
+} catch {
+    Write-Error "An error occurred: $_"
+}
