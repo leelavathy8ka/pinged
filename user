@@ -1,0 +1,24 @@
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+
+    @Override
+    public UserDetails loadUserByUsername(String token) throws UsernameNotFoundException {
+        // Here you should decode and validate the token, then extract user details
+        // For demonstration, assume the token itself is the username
+        if ("validToken123".equals(token)) {
+            return User.builder()
+                       .username("user123")
+                       .password("") // Password is not used in pre-authentication
+                       .roles("USER")
+                       .build();
+        } else {
+            throw new UsernameNotFoundException("Invalid token");
+        }
+    }
+}
