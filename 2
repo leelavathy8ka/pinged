@@ -1,0 +1,114 @@
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.*;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+import static org.mockito.MockitoAnnotations.openMocks;
+
+@ExtendWith(MockitoExtension.class)
+public class CallTest {
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @InjectMocks
+    private Call call;
+
+    private String sparkflowUrl;
+    private String token;
+    private String groupName;
+    private String workflowParameters;
+    private String pipelineName;
+    private String userName;
+    private String password;
+
+    @BeforeEach
+    public void setUp() {
+        openMocks(this);
+        call = new Call(restTemplate);
+        
+        sparkflowUrl = "http://testurl.com";
+        token = "testToken";
+        groupName = "testGroup";
+        workflowParameters = "testWorkflowParams";
+        pipelineName = "testPipeline";
+        userName = "testUser";
+        password = "testPass";
+    }
+
+    @Test
+    public void testTriggerSparkflow_successfulExecution() throws Exception {
+        // Prepare response entity
+        ResponseEntity<Object> responseEntity = new ResponseEntity<>("Success", HttpStatus.OK);
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
+                .thenReturn(responseEntity);
+
+        String response = call.triggerSparkflow(sparkflowUrl, token, groupName, workflowParameters, pipelineName, userName, password);
+        assertEquals("Success", response);
+
+        verify(restTemplate, times(1)).exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class));
+    }
+
+    @Test
+    public void testTriggerSparkflow_resourceAccessException() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
+                .thenThrow(new ResourceAccessException("Resource unavailable"));
+
+        Exception exception = assertThrows(InvalidPipelineExecutionException.class, () -> {
+            call.triggerSparkflow(sparkflowUrl, token, groupName, workflowParameters, pipelineName, userName, password);
+        });
+
+        assertEquals("Resource unavailable", exception.getMessage());
+        verify(restTemplate, times(1)).exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class));
+    }
+
+    @Test
+    public void testTriggerSparkflow_httpClientErrorException() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
+                .thenThrow(new HttpClientErrorException(HttpStatus.BAD_REQUEST, "Bad Request"));
+
+        Exception exception = assertThrows(InvalidPipelineExecutionException.class, () -> {
+            call.triggerSparkflow(sparkflowUrl, token, groupName, workflowParameters, pipelineName, userName, password);
+        });
+
+        assertEquals("Bad Request", exception.getMessage());
+        verify(restTemplate, times(1)).exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class));
+    }
+
+    @Test
+    public void testTriggerSparkflow_httpServerErrorException() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
+                .thenThrow(new HttpServerErrorException(HttpStatus.INTERNAL_SERVER_ERROR, "Server Error"));
+
+        Exception exception = assertThrows(InvalidPipelineExecutionException.class, () -> {
+            call.triggerSparkflow(sparkflowUrl, token, groupName, workflowParameters, pipelineName, userName, password);
+        });
+
+        assertEquals("Server Error", exception.getMessage());
+        verify(restTemplate, times(1)).exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class));
+    }
+
+    @Test
+    public void testTriggerSparkflow_otherException() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
+                .thenThrow(new RuntimeException("Unexpected error"));
+
+        Exception exception = assertThrows(InvalidPipelineExecutionException.class, () -> {
+            call.triggerSparkflow(sparkflowUrl, token, groupName, workflowParameters, pipelineName, userName, password);
+        });
+
+        assertEquals("Unexpected error", exception.getMessage());
+        verify(restTemplate, times(1)).exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class));
+    }
+}
