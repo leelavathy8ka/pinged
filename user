@@ -1,24 +1,1231 @@
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.stereotype.Service;
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
 
-@Service
-public class CustomUserDetailsService implements UserDetailsService {
+import com.amazonaws.services.simplesystemsmanagement.AWSSimpleSystemsManagement;
+import com.amazonaws.services.simplesystemsmanagement.model.GetParameterRequest;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ActionsService;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.ActionInterface;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.apiCall.Call;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.InvalidPipelineExecutionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Execution.FileArrival;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.AccountActionConfiguration;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.Attribute;
+import lombok.Generated;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Collections;
+import java.util.List;
+
+import static com.changehealthcare.dqs.fam.fam_actions_service.actions.ExecutePipelineActionType.*;
+
+@Generated
+public class ExecutePipelineAction extends Action implements ActionInterface {
+    static Logger log = LoggerFactory.getLogger(ExecutePipelineAction.class);
+    @Autowired
+    private  ActionsService service;
+
+    @Autowired
+    RestTemplate restTemplate;
+
+    @Value("${executePipeline-ssm:/data-quality/fam/action/executePipeline}")
+    public String ssmtoken;
+    @Autowired
+    AWSSimpleSystemsManagement ssmClient;
+    public ExecutePipelineAction(List<Attribute> fields) {
+        super(new ExecutePipelineActionType(), fields);
+    }
+    public ExecutePipelineAction(String userName) {
+        super(new ExecutePipelineActionType(), Collections.singletonList(new Attribute(USERNAME_PROPERTY, userName)));
+    }
+    public ExecutePipelineAction(String userName, String password) {
+        super(new ExecutePipelineActionType(), List.of(new Attribute(USERNAME_PROPERTY, userName), new Attribute(PASSWORD_PROPERTY, password)));
+    }
+
+    public ExecutePipelineAction(String userName, String password, String pipeline) {
+        super(new ExecutePipelineActionType(), List.of(new Attribute(USERNAME_PROPERTY, userName), new Attribute(PASSWORD_PROPERTY, password),new Attribute(PIPELINE_PROPERTY, pipeline)));
+    }
+
+    public ExecutePipelineAction(String userName, String password, String pipeline, String projectId) {
+        super(new ExecutePipelineActionType(), List.of(new Attribute(USERNAME_PROPERTY, userName), new Attribute(PASSWORD_PROPERTY, password),new Attribute(PIPELINE_PROPERTY, pipeline), new Attribute(PROJECTID_PROPERTY,projectId)));
+    }
+
+    public ExecutePipelineAction(String userName, String password, String pipeline, String projectId, String workFlowParam) {
+        super(new ExecutePipelineActionType(), List.of(new Attribute(USERNAME_PROPERTY, userName), new Attribute(PASSWORD_PROPERTY, password),new Attribute(PIPELINE_PROPERTY, pipeline), new Attribute(PROJECTID_PROPERTY,projectId),new Attribute(WORKFLOWPARAMETERS_PROPERTY,workFlowParam)));
+    }
+
+    public ExecutePipelineAction(String userName, String password, String pipeline, String projectId, String workFlowParam, String url) {
+        super(new ExecutePipelineActionType(), List.of(new Attribute(USERNAME_PROPERTY, userName), new Attribute(PASSWORD_PROPERTY, password),new Attribute(PIPELINE_PROPERTY, pipeline), new Attribute(PROJECTID_PROPERTY,projectId),new Attribute(WORKFLOWPARAMETERS_PROPERTY,workFlowParam),new Attribute(URL_PROPERTY,url)));
+    }
+
+    public String executePipeline(String url , String pipelineName, String groupName, String userName, String password, String workflowParameters) throws InvalidPipelineExecutionException {
+        try {
+            log.info(" Spark FLow Execution started ");
+            return triggerSparkflow(url,pipelineName, groupName,userName,password,workflowParameters);
+        } catch (Exception ex) {
+            log.error("Spark FLow Execution : " + ex);
+        }
+        return null;
+    }
+    public String triggerSparkflow(String url , String pipelineName, String groupName, String userName, String password, String workflowParameters) throws InvalidPipelineExecutionException {
+        String token = getTokenFromSSM();
+        Call call = new Call(restTemplate);
+        String response = call.triggerSparkflow(url, token, groupName, workflowParameters, pipelineName,userName,password);
+        log.info("FamPipelineExecutionResponse [{}]", response);
+        return response;
+    }
+
+    public String getTokenFromSSM() {
+        try {
+            GetParameterRequest request = new GetParameterRequest()
+                    .withName(ssmtoken)
+                    .withWithDecryption(true);
+            String value = ssmClient.getParameter(request).getParameter().getValue();
+            if (value == null || value.isEmpty()) {
+                log.info("value is not exist  SSM");
+            }
+
+            return value;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     @Override
-    public UserDetails loadUserByUsername(String token) throws UsernameNotFoundException {
-        // Here you should decode and validate the token, then extract user details
-        // For demonstration, assume the token itself is the username
-        if ("validToken123".equals(token)) {
-            return User.builder()
-                       .username("user123")
-                       .password("") // Password is not used in pre-authentication
-                       .roles("USER")
-                       .build();
-        } else {
-            throw new UsernameNotFoundException("Invalid token");
+    public void execute(String actionID, List<FileArrival> fileArrivalObjects, FileArrival manifestArrivalObject) {
+        List<AccountActionConfiguration> cfgs = service.getActionsById(actionID);
+        AccountActionConfiguration cfg = cfgs.stream().findAny().get();
+        ActionFactory actionFactory = new ActionFactory();
+        try {
+            Action action = actionFactory.getInstance(cfg);
+            String pipelineName = action.getFields().stream().filter(o -> o.getName().equals(PIPELINE_PROPERTY)).findFirst().get().getValue();
+            String groupName = action.getFields().stream().filter(o -> o.getName().equals(PROJECTID_PROPERTY)).findFirst().get().getValue();
+            String url = action.getFields().stream().filter(o -> o.getName().equals(URL_PROPERTY)).findFirst().get().getValue();
+            String userName = action.getFields().stream().filter(o -> o.getName().equals(USERNAME_PROPERTY)).findFirst().get().getValue();
+            String password = action.getFields().stream().filter(o -> o.getName().equals(PASSWORD_PROPERTY)).findFirst().get().getValue();
+            String workflowParameters = action.getFields().stream().filter(o -> o.getName().equals(WORKFLOWPARAMETERS_PROPERTY)).findFirst().get().getValue();
+            executePipeline(url, pipelineName, groupName,userName,password,workflowParameters);
+        }  catch (InvalidPipelineExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (ActionException e) {
+            throw new RuntimeException(e);
         }
     }
 }
+
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.FieldType;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionFields;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionTypeMetadata;
+
+import java.util.List;
+
+public class ExecutePipelineActionType extends ActionTypeMetadata {
+
+
+    static String USERNAME_PROPERTY = "userName";
+    static String PASSWORD_PROPERTY = "password";
+    static String PIPELINE_PROPERTY = "pipelineName";
+    static String PROJECTID_PROPERTY = "projectId";
+    static String WORKFLOWPARAMETERS_PROPERTY = "workflowParameter";
+
+    static String URL_PROPERTY = "url";
+
+
+    public ExecutePipelineActionType() {
+        actionType = ActionType.EXECUTE_PIPELINE;
+        description =  "Publish Specific File Type Arrivals to E2E System via an SNS Publish";
+        fields = List.of(
+         new ActionFields(USERNAME_PROPERTY, "The username is required for pipeline to trigger", FieldType.STRING, true, false),
+         new ActionFields(PASSWORD_PROPERTY, "The password is the required filed as username", FieldType.STRING, false, false),
+         new ActionFields(PIPELINE_PROPERTY, "Pipeline property are mentioned here", FieldType.STRING, false, false),
+         new ActionFields(PROJECTID_PROPERTY, "Pipeline must have project id", FieldType.STRING, false, false),
+         new ActionFields(WORKFLOWPARAMETERS_PROPERTY, "Work Flow parameters are required for pipeline to execute", FieldType.STRING, false, false),
+         new ActionFields(URL_PROPERTY, "The exact url should be provided", FieldType.STRING, false, false)
+
+        );
+    }
+}
+
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.amazonaws.services.sns.AmazonSNS;
+import com.amazonaws.services.sns.model.PublishRequest;
+import com.amazonaws.services.sns.model.PublishResult;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ActionsService;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.ActionInterface;
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.InvalidSNSActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Execution.FileArrival;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.AccountActionConfiguration;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.Attribute;
+import lombok.Generated;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import static com.changehealthcare.dqs.fam.fam_actions_service.actions.SNSActionType.*;
+
+@Generated
+public class SNSAction extends Action implements ActionInterface {
+    static Logger log = LoggerFactory.getLogger(SNSAction.class);
+    @Autowired
+    private ActionsService service;
+    @Autowired
+    private AmazonSNS sns;
+
+    public SNSAction(List<Attribute> fields) {
+        super(new SNSActionType(), fields);
+    }
+
+    public SNSAction(String snsTopic) {
+        super(new SNSActionType(), Collections.singletonList(new Attribute(SNSTOPIC_PROPERTY, snsTopic)));
+    }
+
+    public SNSAction(String snsTopic, String subject) {
+        super(new SNSActionType(), List.of(new Attribute(SNSTOPIC_PROPERTY, snsTopic), new Attribute(SUBJECT_PROPERTY, subject)));
+    }
+
+    public SNSAction(String snsTopic, String subject, String message) {
+        super(new SNSActionType(), List.of(new Attribute(SNSTOPIC_PROPERTY, snsTopic), new Attribute(SUBJECT_PROPERTY, subject), new Attribute(MESSAGE_PROPERTY, message)));
+    }
+
+    public SNSAction(String snsTopic, String subject, String message, String payloadType) {
+        super(new SNSActionType(), List.of(new Attribute(SNSTOPIC_PROPERTY, snsTopic), new Attribute(SUBJECT_PROPERTY, subject), new Attribute(MESSAGE_PROPERTY, message), new Attribute(PAYLOAD_TYPE_PROPERTY, payloadType)));
+    }
+
+    public String executeSNS(String subject, String topicArn, String message) throws InvalidSNSActionException {
+        try {
+            if (topicArn.isEmpty()) {
+                throw new InvalidSNSActionException(topicArn, "No SNS Topic ARNs found");
+            }
+            PublishRequest req = new PublishRequest(topicArn, message, subject);
+            publishSnsRequest(req);
+            return "Executed";
+
+        } catch (Exception ex) {
+            throw new InvalidSNSActionException(topicArn, "No topicArn Details found");
+        }
+    }
+
+
+    // Ignore for unit test coverage, PublishRequest cannot be mocket to return sepectic HTTP Status
+    // Codes
+    void publishSnsRequest(PublishRequest req) {
+        PublishResult result = sns.publish(req);
+        int httpStatus = result.getSdkHttpMetadata().getHttpStatusCode();
+        if (httpStatus != 200) {
+            log.error(
+                    "ERROR: Publishing to SNS Topic [{}]. HTTP Status [{}].", req.getTopicArn(), httpStatus);
+        } else {
+            log.info("Published [{}] To SNS Topic [{}].", req.getSubject(), req.getTopicArn());
+        }
+    }
+
+    @Override
+    public void execute(String actionID, List<FileArrival> fileArrivalObjects, FileArrival manifestArrivalObject) {
+
+        List<Attribute> topics = this.getFieldsByName(SNSTOPIC_PROPERTY);
+        Attribute subject = this.getField(SUBJECT_PROPERTY);
+        Attribute payloadType = this.getField(PAYLOAD_TYPE_PROPERTY);
+
+        //TODO Add both file arrival and manifest files together
+        List<FileArrival> allFilesList = new ArrayList<>(fileArrivalObjects);
+        allFilesList.add(manifestArrivalObject);
+
+        // TODO to check if payloadType is filesList or payload type is file names list and save it in content
+
+        String content = null;
+        if (ActionPayloadType.FILE_ARRIVALS_LIST.equals(payloadType)) {
+            // if the payload type is "FILE_ARRIVALS_LIST", the content is a list of file arrivals
+            StringBuilder fileList = new StringBuilder();
+            for (FileArrival fileArrival : allFilesList) {
+                fileList.append(fileArrival.toString()).append("\n");
+            }
+            content = fileList.toString();
+        } else if (ActionPayloadType.FILE_NAME_LIST.equals(payloadType)) {
+            // if the payload type is "FILE_NAMES_LIST", the content is a list of file names
+            StringBuilder fileNamesList = new StringBuilder();
+            for (FileArrival fileArrival : allFilesList) {
+                fileNamesList.append(fileArrival.getFileName()).append("\n");
+            }
+            content = fileNamesList.toString();
+        }
+
+        try {
+//            List<AccountActionConfiguration> cfgs = service.getActionsByAccountIdAndType(actionID, ActionType.SNS);
+//            AccountActionConfiguration cfg = cfgs.stream().findAny().get();
+//            ActionFactory factory = new ActionFactory();
+//            Action action = factory.getInstance(cfg);
+//            String snsTopic = action.getFields().stream().filter(o -> o.getName().equals(SNSTOPIC_PROPERTY)).findFirst().get().getValue();
+//            String subject = action.getFields().stream().filter(o -> o.getName().equals(SUBJECT_PROPERTY)).findFirst().get().getValue();
+//            String content = action.getFields().stream().filter(o -> o.getName().equals(MESSAGE_PROPERTY)).findFirst().get().getValue();
+
+
+            for (Attribute topic : topics) {
+                executeSNS(subject.toString(), content, topic.getValue());
+            }
+        } catch (InvalidSNSActionException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.FieldType;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionFields;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionTypeMetadata;
+
+import java.util.List;
+
+public class SNSActionType extends ActionTypeMetadata {
+    static String SNSTOPIC_PROPERTY = "snsAlertingArn";
+    static String MESSAGE_PROPERTY = "message";
+    static String SUBJECT_PROPERTY = "subject";
+
+    static String PAYLOAD_TYPE_PROPERTY = "payloadType";
+
+    public SNSActionType() {
+        actionType = ActionType.SNS;
+        description =  "Publishes Message to One or More AWS SNS Topics";
+        fields = List.of(
+            new ActionFields(SNSTOPIC_PROPERTY, "ARN of the SNS Topic which to publish to. This is a repeatable filed enabling publishing to more than one topic with a single action execution", FieldType.STRING, true, true),
+            new ActionFields(SUBJECT_PROPERTY, "The subject used when posting to SNS topic.  For use in filtering.  Will be email subject if topic has email subscriptions", FieldType.STRING, false, false),
+            new ActionFields(MESSAGE_PROPERTY, "The message is the actual message we send in the mail", FieldType.STRING, false, false),
+            new ActionFields(PAYLOAD_TYPE_PROPERTY, "Payload types are FILE_ARRIVAL_LIST or FILE_NAME_LIST", FieldType.ENUM, true, false)
+          );
+    }
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionTypeMetadata;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+public class ActionTypes {
+
+    private final static List<ActionTypeMetadata> registeredTypes = new ArrayList<>();
+
+    static {
+        // IMPORTANT NOTE:  for a condition type to be available in the system, it must be added to the conditionTypes list below.
+        registeredTypes.add(new SNSActionType());
+        registeredTypes.add(new ExecutePipelineActionType());
+    }
+
+    public static List<ActionTypeMetadata> get() {
+        return registeredTypes;
+    }
+
+    public static ActionTypeMetadata get(ActionType type){
+        for(ActionTypeMetadata actionTypeMetadata : registeredTypes){
+            if(actionTypeMetadata.getActionType().equals(type)){
+                return actionTypeMetadata;
+            }
+        }
+        return null;
+    }
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.AccountActionConfiguration;
+import org.springframework.stereotype.Component;
+
+
+@Component
+public class ActionFactory {
+
+    public <T extends Action> T getInstance(AccountActionConfiguration cfg) throws ActionException {
+        Action action;
+        switch (cfg.getActionType()) {
+            case SNS:
+                action = new SNSAction(cfg.getFields());
+                break;
+            case EXECUTE_PIPELINE:
+                action = new ExecutePipelineAction(cfg.getFields());
+                break;
+            default:
+                throw new ActionException(String.format("Unexpected Action Type [%s].", cfg.getActionType()));
+        }
+
+        // Return the fully configured condition
+        return (T) action;
+    }
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.interfaces.ActionTypeMetadataInterface;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionFields;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.Attribute;
+import lombok.Data;
+import lombok.SneakyThrows;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+@Data
+public class Action {
+
+    private final ActionTypeMetadataInterface typeMetadata;
+    private final String conditionID;
+    private final List<ActionFields> fieldsMetadata;
+    private final ActionType type;
+    private final List<Attribute> fields;
+
+    private int order;
+
+
+    @SneakyThrows
+    public Action(ActionTypeMetadataInterface typeMetadata, List<Attribute> fields) {
+        this.conditionID = UUID.randomUUID().toString();
+        this.typeMetadata = typeMetadata;
+        this.fields = fields;
+
+        fieldsMetadata = typeMetadata.getFields();
+        type = typeMetadata.getActionType();
+
+        isValid();
+    }
+
+    // Returns the FIRST field found with the given name
+    protected Attribute getField(String fieldName) {
+        List<Attribute> fields = getFieldsByName(fieldName);
+        if(fields.isEmpty()) {
+            return null;
+        }
+        return fields.get(0);
+    }
+
+    protected List<Attribute> getFieldsByName(String fieldName) {
+        List<Attribute> result = new ArrayList<>();
+        for (Attribute field : fields) {
+            if (field.getName().equalsIgnoreCase(fieldName)) {
+                result.add(field);
+            }
+        }
+        return result;
+    }
+
+    private boolean isFieldPermitted(String fieldName) {
+        for (ActionFields metaField : fieldsMetadata) {
+            if (metaField.getName().equalsIgnoreCase(fieldName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Required fields in the metadata MUST be present in the condition and not null or empty
+    public void isValid() throws ActionException {
+        // Check null
+        if ((fields == null || fields.isEmpty()) && fieldsMetadata != null && !fieldsMetadata.isEmpty()) {
+            throw new ActionException(String.format("[%d] Fields defined for  action type [%s]. None were provided.", fieldsMetadata.size(), typeMetadata.getActionType()));
+        }
+
+        if(fields == null || fields.isEmpty()) {
+            return;
+        }
+
+        // Check permitted fields
+        for(Attribute field : fields) {
+            if (!isFieldPermitted(field.getName())) {
+                throw new ActionException(String.format("Field [%s] is not permitted in action type [%s].", field.getName(), typeMetadata.getActionType()));
+            }
+        }
+
+        // Duplicate filed check
+        for(ActionFields metaField: fieldsMetadata) {
+            List<Attribute> fields = getFieldsByName(metaField.getName());
+            if(fields.size() > 1 && !metaField.isRepeatable()){
+                throw new ActionException(String.format("Field [%s] is not repeatable in action type [%s].", metaField.getName(), typeMetadata.getActionType()));
+            }
+        }
+
+        // check required fields
+        for(ActionFields metaField: fieldsMetadata) {
+            if (metaField.isRequired()) {
+                Attribute field = getField(metaField.getName());
+                if (field == null) {
+                    throw new ActionException(String.format("Field [%s] is required in action type [%s].", metaField.getName(), typeMetadata.getActionType()));
+                }
+                if (field.getValue() == null || field.getValue().isEmpty()) {
+                    throw new ActionException(String.format("Field [%s] is required in action type [%s] But Value is Empty.", metaField.getName(), typeMetadata.getActionType()));
+                }
+            }
+        }
+
+    }
+
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.controller;
+
+import com.amazonaws.util.StringUtils;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ActionsService;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.GetExecutionResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.PostExecutionResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.MetricsService;
+import com.changehealthcare.dqs.fam.fam_actions_service.actions.ActionFactory;
+import com.changehealthcare.dqs.fam.fam_actions_service.actions.ActionTypes;
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Error.ErrorCode;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Error.StandardError;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Execution.Execution;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.GetResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.AccountActionConfiguration;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionTypeMetadata;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.DeleteActionResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.api.PostActionRequest;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.api.PostActionResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+
+@RestController
+public class ActionController {
+
+    static Logger log = LoggerFactory.getLogger(ActionController.class);
+
+    private final List<ActionTypeMetadata> types;
+    private final ActionsService service;
+    private final ActionFactory factory;
+    private final MetricsService metrics;
+
+
+    public ActionController(
+            @Autowired ActionsService service,
+            @Autowired ActionFactory factory,
+            @Autowired MetricsService metrics)
+    {
+        this.metrics = metrics;
+        types = ActionTypes.get();
+        this.service = service;
+        this.factory = factory;
+    }
+
+
+    @GetMapping(value = "/action-types")
+    public ResponseEntity<GetResponse> getActionTypes(@RequestParam(name = "type", required = false) ActionType actionType) {
+        GetResponse rsp = new GetResponse();
+        try{
+            metrics.countActionTypesQueried(actionType == null ? null : actionType.toString());
+            if(actionType == null) {
+                rsp.actionTypes = types;
+            } else {
+                for(ActionTypeMetadata type : types) {
+                    if(type.getActionType().equals(actionType)) {
+                        rsp.actionTypes.add(type);
+                    }
+                }
+            }
+            log.info("[{}] Action Types Returned.", rsp.getActionTypes().size());
+            return new ResponseEntity<>(rsp, HttpStatus.OK);
+        }catch (Exception e) {
+            metrics.countFamError();
+            String msg = String.format("[%s] EXCEPTION: Getting Action Types: %s", e.getClass().getSimpleName(), e.getMessage());
+            log.error(msg, e);
+            rsp.getErrors().add(new StandardError(ErrorCode.EXCEPTION, msg));
+            return new ResponseEntity<>(rsp, HttpStatus.INTERNAL_SERVER_ERROR);
+        } finally {
+            metrics.publishMetrics();
+        }
+    }
+
+    //--------------------- Action API's --------------------------------------
+
+    @GetMapping(value = "/actions")
+    public ResponseEntity<ActionResponse> getActions(
+            @RequestParam(name = "actionid", required = false) String actionId,
+            @RequestParam(name = "type", required = false) ActionType actionType,
+            @RequestParam(name = "accountid", required = false) String accountId
+    ) {
+        ActionResponse rsp = new ActionResponse();
+        try {
+            log.info("GET Actions. Action ID [{}]. Type [{}]. Account ID [{}].", actionId, actionType, accountId);
+            List<AccountActionConfiguration> actions;
+            metrics.countActionsQueried(accountId, actionType == null ? null : actionType.toString());
+
+            if( !StringUtils.isNullOrEmpty(actionId)){
+                actions = service.getActionsById(actionId);
+            }
+            else if(!StringUtils.isNullOrEmpty(accountId) && actionType != null) {
+                actions = service.getActionsByAccountIdAndType(accountId, actionType);
+            }
+            else if(!StringUtils.isNullOrEmpty(accountId)) {
+                actions = service.getActionsByAccountId(accountId);
+            }
+            else if(actionType != null) {
+                actions = service.getActionsByActionType(actionType);
+            }
+            else {
+                actions = service.getAllActions();
+            }
+
+            if(actions == null || actions.isEmpty()) {
+                log.info("[0] Actions Found.  Returning [{}].", HttpStatus.NOT_FOUND);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(rsp);
+            }
+
+            log.info("[{}] Actions Returned.", actions.size());
+            rsp.setActions(actions);
+            return new ResponseEntity<>(rsp, HttpStatus.OK);
+
+        }  catch (Exception e) {
+            metrics.countFamError();
+            String msg = String.format("[%s] EXCEPTION: GET Actions: %s", e.getClass().getSimpleName(), e.getMessage());
+            log.error(msg, e);
+            rsp.getErrors().add(new StandardError(ErrorCode.EXCEPTION, msg));
+            return new ResponseEntity<>(rsp, HttpStatus.INTERNAL_SERVER_ERROR);
+        }finally {
+            metrics.publishMetrics();
+        }
+    }
+
+    @PostMapping(value = "/actions")
+    public ResponseEntity<PostActionResponse> createNewAction(
+            @RequestBody PostActionRequest req
+    ) {
+        PostActionResponse rsp = new PostActionResponse();
+        try {
+            if (StringUtils.isNullOrEmpty(req.getCreatedBy())) {
+                // TODO: createdBy not defined in request so get it from  Apigee?
+                req.setCreatedBy("tbd");
+            }
+
+            log.info("POST New Action: {}", req);
+
+            AccountActionConfiguration toSave = new AccountActionConfiguration(req);
+
+            // Must validate condition against action type, else it is a bad request.
+            // Factory validates instance before returning it, if validation fails a ConditionException is thrown
+            factory.getInstance(toSave);
+
+            AccountActionConfiguration saved = service.saveAction(toSave);
+            metrics.countActionSaved(saved.getAccountID());
+            // get the condition from the db (ensuring it persisted) and return it in the response.
+            log.info("POST New Action SUCCESS");
+            log.debug("New Action: {}", saved);
+            rsp.setAction(saved);
+            log.debug("CONTROLLER: POST Response: {}", rsp);
+            return new ResponseEntity<>(rsp, HttpStatus.CREATED);
+        } catch (ActionException e) {
+            metrics.countPostActionBadRequest(req.getAccountID());
+            String msg = String.format("POST New Action - Invalid Action Configuration: %s", e.getMessage());
+            log.error(msg, e);
+            rsp.getErrors().add(new StandardError(ErrorCode.VALIDATION, msg));
+            return new ResponseEntity<>(rsp, HttpStatus.BAD_REQUEST);
+        } catch (Exception e) {
+            metrics.countFamError();
+            String msg = String.format("[%s] EXCEPTION: POST New Action: %s", e.getClass().getSimpleName(), e.getMessage());
+            log.error(msg, e);
+            rsp.getErrors().add(new StandardError(ErrorCode.EXCEPTION, msg));
+            return new ResponseEntity<>(rsp, HttpStatus.INTERNAL_SERVER_ERROR);
+        }finally {
+            metrics.publishMetrics();
+        }
+
+    }
+
+
+// Get /actions API
+
+    @GetMapping(value = "/actions/{actionId}")
+    public ResponseEntity<ActionResponse> getActionByID(
+            @PathVariable String actionId
+    ) {
+        // No need for try catch here, it is handled by getConditions
+        log.info("GET Action by ID [{}]", actionId);
+        return getActions(actionId, null, null);
+    }
+
+
+    @DeleteMapping(value = "/actions/{actionId}")
+    public ResponseEntity<DeleteActionResponse> deleteAction(
+            @PathVariable("actionId") String actionId,
+            @RequestParam(name = "hard", required = false) Boolean hardDelete){
+        log.info("DELETE Action [{}]. Hard Delete [{}].", actionId, hardDelete);
+        DeleteActionResponse rsp = new DeleteActionResponse();
+        rsp.setType("Action");
+        rsp.setActionID(actionId);
+        try {
+            if(hardDelete != null && hardDelete) {
+                metrics.countActionHardDeleted();
+                rsp.setHard(true);
+                rsp.setDeleted(service.deleteActionHard(actionId));
+            } else {
+                metrics.countActionSoftDeleted();
+                rsp.setDeleted(service.deleteActionSoft(actionId));
+            }
+            log.info("DELETE Condition [{}]. Success [{}].", actionId, rsp.isDeleted());
+            return new ResponseEntity<>(rsp, HttpStatus.OK);
+        } catch (Exception e) {
+            metrics.countFamError();
+            String msg = String.format("[%s] EXCEPTION: DELETE Action [%s]: %s", e.getClass().getSimpleName(), actionId, e.getMessage());
+            log.error(msg, e);
+            rsp.getErrors().add(new StandardError(ErrorCode.EXCEPTION, msg));
+            return new ResponseEntity<>(rsp, HttpStatus.INTERNAL_SERVER_ERROR);
+        } finally {
+            metrics.publishMetrics();
+        }
+    }
+
+}
+
+
+
+package com.changehealthcare.dqs.fam.fam_actions_service.model.action;
+
+import com.amazonaws.services.dynamodbv2.datamodeling.*;
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.helper.TimeStampHelper;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.api.PostActionRequest;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import java.util.ArrayList;
+import java.util.List;
+
+import static com.changehealthcare.dqs.fam.fam_actions_service.Constants.*;
+
+@DynamoDBTable(tableName = "dqs-fam-actions")
+@DynamoDBDocument
+@Data
+@NoArgsConstructor
+public class AccountActionConfiguration {
+
+    @DynamoDBHashKey
+    @NotBlank
+    private String actionID;
+
+    @DynamoDBIndexHashKey(globalSecondaryIndexNames = {DDB_INDEX_FAM_ACTION_ACCOUNTID_INDEX, DDB_INDEX_FAM_ACTION_ACCOUNTID_ACTIONTYPE_INDEX})
+    @DynamoDBAttribute
+    @NotNull
+    private String accountID;
+
+    @DynamoDBTypeConvertedEnum
+    @DynamoDBIndexHashKey(globalSecondaryIndexName = DDB_INDEX_FAM_ACTION_ACTIONTYPE_INDEX)
+    @DynamoDBIndexRangeKey(globalSecondaryIndexName = DDB_INDEX_FAM_ACTION_ACCOUNTID_ACTIONTYPE_INDEX)
+    @DynamoDBAttribute
+    @NotNull
+    private ActionType actionType;
+
+    @DynamoDBAttribute
+    private String description;
+
+    @DynamoDBAttribute
+    private List<Attribute> fields = new ArrayList<>();
+
+    @DynamoDBAttribute
+    private String createdBy;
+
+    @DynamoDBAttribute
+    @NotNull
+    private String createdOn;
+
+    @DynamoDBAttribute
+    private long createdOnTS;
+
+    @DynamoDBAttribute
+    @NotNull
+    private String updatedOn;
+
+    @DynamoDBAttribute
+    private long updatedOnTS;
+
+    @DynamoDBAttribute
+    private String updatedBy;
+
+    @DynamoDBTyped(DynamoDBMapperFieldModel.DynamoDBAttributeType.BOOL)
+    @DynamoDBAttribute
+    @NotNull
+    public Boolean deleted = false;
+
+
+    public AccountActionConfiguration(PostActionRequest request) {
+        this.accountID = request.getAccountID();
+        this.actionType = request.getActionType();
+        this.fields = request.getFields();
+        this.createdBy = request.getCreatedBy();
+        this.createdOn = TimeStampHelper.getUtcDateString();
+    }
+    public void addField(Attribute field) {
+        fields.add(field);
+    }
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.model.action;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.FieldType;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@NoArgsConstructor
+@AllArgsConstructor
+@Data
+public class ActionFields {
+
+    private String name;
+    private String description;
+    private FieldType type;
+    private boolean required;
+    private boolean repeatable;
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.model.action;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.interfaces.ActionTypeMetadataInterface;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+@NoArgsConstructor
+@AllArgsConstructor
+@Data
+public class ActionTypeMetadata  implements ActionTypeMetadataInterface {
+//  public String actionTypeId;
+ public ActionType actionType;
+ public String description;
+ public List<ActionFields> fields;
+
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.model.action;
+
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBAttribute;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBDocument;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@DynamoDBDocument
+public class Attribute {
+    @DynamoDBAttribute
+    private String name;
+
+    @DynamoDBAttribute
+    private String value;
+}
+package com.changehealthcare.dqs.fam.fam_actions_service;
+
+import com.amazonaws.ClientConfiguration;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapper;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapperConfig;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+
+public class DynamoDBConfig {
+    @Value("${aws.maxRetry:5}")
+    private int maxRetry;
+
+    @Value("${aws.region:us-east-1}")
+    private String region;
+
+    @Bean
+    public DynamoDBMapper dynamoDBMapper() {
+        AmazonDynamoDB dynamoDBClient =
+                AmazonDynamoDBClientBuilder.standard()
+                        .withClientConfiguration(new ClientConfiguration().withMaxErrorRetry(maxRetry))
+                        .withRegion(region)
+                        .build();
+
+        DynamoDBMapperConfig dynamoDBMapperConfig =
+                new DynamoDBMapperConfig.Builder()
+                        .withSaveBehavior(DynamoDBMapperConfig.SaveBehavior.UPDATE_SKIP_NULL_ATTRIBUTES)
+                        .withConsistentReads(DynamoDBMapperConfig.ConsistentReads.CONSISTENT)
+                        .build();
+
+        return new DynamoDBMapper(dynamoDBClient, dynamoDBMapperConfig);
+    }
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.Service;
+
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBMapper;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBQueryExpression;
+import com.amazonaws.services.dynamodbv2.datamodeling.DynamoDBScanExpression;
+import com.amazonaws.services.dynamodbv2.model.AttributeValue;
+import com.amazonaws.util.StringUtils;
+import com.changehealthcare.dqs.fam.fam_actions_service.Constants;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.ActionInterface;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.GetExecutionResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction.PostExecutionResponse;
+import com.changehealthcare.dqs.fam.fam_actions_service.actions.ActionFactory;
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.*;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Execution.ActionHistory;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Execution.FileArrival;
+import lombok.Generated;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import java.util.*;
+
+@Generated
+@Service
+public class ActionsService {
+
+    static Logger log = LoggerFactory.getLogger(ActionsService.class);
+
+    private final ActionFactory actionFactory;
+    private final DynamoDBMapper db;
+
+    public ActionsService(ActionFactory actionFactory, DynamoDBMapper db) {
+        this.actionFactory = actionFactory;
+        this.db = db;
+    }
+
+
+    //--------------------- Action API's --------------------------------------
+    public boolean deleteActionHard(String actionID) {
+        AccountActionConfiguration action = db.load(AccountActionConfiguration.class, actionID);
+        if (action == null) {
+            return false;
+        }
+        db.delete(action);
+        return true;
+    }
+
+    public boolean deleteActionSoft(String actionID) {
+        AccountActionConfiguration action = db.load(AccountActionConfiguration.class, actionID);
+        if (action == null) {
+            return false;
+        }
+        action.setDeleted(true);
+        db.save(action);
+        return true;
+    }
+
+    private List<AccountActionConfiguration> filterSoftDeleted(List<AccountActionConfiguration> actions) {
+        log.info("Filtering Soft Deleted Actions from [{}] Total actions Found.", actions.size());
+        int deletedActions = 0;
+        List<AccountActionConfiguration> result = new ArrayList<>();
+        for (AccountActionConfiguration action : actions) {
+            if (!action.getDeleted()) {
+                result.add(action);
+            } else {
+                deletedActions++;
+            }
+        }
+        log.info("[{}] Deleted Actions Removed. Returning [{}] actions.", deletedActions, result.size());
+        return result;
+    }
+
+
+    public AccountActionConfiguration saveAction(AccountActionConfiguration action) {
+        // If it is a new configuration, set the ID
+        if(StringUtils.isNullOrEmpty(action.getActionID())) {
+            action.setActionID(UUID.randomUUID().toString());
+        }
+        // for case insensitivity, account ID is set to caps by defaults
+        action.setAccountID(action.getAccountID().toUpperCase());
+
+        db.save(action);
+        return action;
+    }
+
+    public List<AccountActionConfiguration> getAllActions() {
+        return filterSoftDeleted(db.scan(AccountActionConfiguration.class, new DynamoDBScanExpression()));
+    }
+    public List<AccountActionConfiguration>  getActionsById(String actionId) {
+        List<AccountActionConfiguration> result = new ArrayList<>();
+        AccountActionConfiguration condition = db.load(AccountActionConfiguration.class, actionId);
+        if(condition != null){
+            result.add(condition);
+        }
+        return result;
+    }
+
+    public List<AccountActionConfiguration> getActionsByAccountIdAndType(String accountId, ActionType actionType) {
+        Map<String, String> expressionAttributesNames = new HashMap<>();
+        expressionAttributesNames.put("#accountID", "accountID");
+        expressionAttributesNames.put("#actionType", "actionType");
+
+        Map<String, AttributeValue> expressionAttributeValues = new HashMap<>();
+        expressionAttributeValues.put(":accountID", new AttributeValue().withS(accountId.toUpperCase()));
+        expressionAttributeValues.put(":actionType", new AttributeValue().withS(actionType.toString()));
+
+        DynamoDBQueryExpression<AccountActionConfiguration> queryExpression = new DynamoDBQueryExpression<AccountActionConfiguration>()
+                .withIndexName(Constants.DDB_INDEX_FAM_ACTION_ACCOUNTID_ACTIONTYPE_INDEX)
+                .withKeyConditionExpression("#accountID = :accountID and #actionType = :actionType")
+                .withExpressionAttributeNames(expressionAttributesNames)
+                .withExpressionAttributeValues(expressionAttributeValues)
+                .withConsistentRead(false);
+
+        return filterSoftDeleted(db.query(AccountActionConfiguration.class, queryExpression));
+    }
+
+    public List<AccountActionConfiguration> getActionsByAccountId(String accountId) {
+        AccountActionConfiguration action = new AccountActionConfiguration();
+        action.setAccountID(accountId.toUpperCase()); // for case insensitivity, account ID is set to caps by default
+
+        DynamoDBQueryExpression<AccountActionConfiguration> queryExpression =
+                new DynamoDBQueryExpression<AccountActionConfiguration>()
+                        .withHashKeyValues(action)
+                        .withLimit(10)
+                        .withIndexName(Constants.DDB_INDEX_FAM_ACTION_ACCOUNTID_INDEX)
+                        .withConsistentRead(false);  // Consistent reads not supported on GSI
+
+
+        return filterSoftDeleted(db.query(AccountActionConfiguration.class, queryExpression));
+    }
+
+    public List<AccountActionConfiguration> getActionsByActionType(ActionType actionType) {
+        AccountActionConfiguration action = new AccountActionConfiguration();
+        action.setActionType(actionType);
+
+        DynamoDBQueryExpression<AccountActionConfiguration> queryExpression =
+                new DynamoDBQueryExpression<AccountActionConfiguration>()
+                        .withHashKeyValues(action)
+                        .withLimit(10)
+                        .withIndexName(Constants.DDB_INDEX_FAM_ACTION_ACTIONTYPE_INDEX)
+                        .withConsistentRead(false);  // Consistent reads not supported on GSI
+
+
+        return filterSoftDeleted(db.query(AccountActionConfiguration.class, queryExpression));
+    }
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.Service.ExecuteAction;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.model.Execution.FileArrival;
+
+import java.util.List;
+
+public interface ActionInterface {
+    void execute(String actionID, List<FileArrival> fileArrivalObjects, FileArrival manifestArrivalObject);
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.Service.apiCall;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.InvalidPipelineExecutionException;
+import lombok.Generated;
+import org.apache.commons.codec.binary.Base64;
+import org.apache.http.entity.ContentType;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
+
+@Generated
+@Service
+public class Call {
+
+    static Logger log = LoggerFactory.getLogger(Call.class);
+
+    private final RestTemplate restTemplate;
+
+    public Call(@Autowired RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+
+    public String triggerSparkflow(String sparkflowUrl, String token, String groupName,
+                                   String workflowParameters,
+                                   String pipelineName,String userName,
+                                   String password) throws InvalidPipelineExecutionException {
+        try {
+            String plainCreds = userName+":"+Base64.decodeBase64(password);
+            byte[] plainCredsBytes = plainCreds.getBytes();
+            byte[] base64CredsBytes = Base64.encodeBase64(plainCredsBytes);
+            String base64Creds = new String(base64CredsBytes);
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Authorization", "Basic " + base64Creds);
+            log.info("Trigger post Call :[ {}] ,groupName [{} ],workflowParameters [{} ],pipelineName [{} ] ]", sparkflowUrl, groupName, workflowParameters, pipelineName);
+            headers.add("token", token);
+            headers.add(org.apache.http.HttpHeaders.ACCEPT, ContentType.APPLICATION_JSON.getMimeType());
+            JSONObject requestBody = new JSONObject();
+            requestBody.put("userName", "admin");
+            requestBody.put("workflowParameters", workflowParameters);
+            UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(sparkflowUrl)
+                    .queryParam("pipelineName", pipelineName)
+                    .queryParam("projectId", groupName);
+
+            String uriBuilder = builder.build().toUriString();
+            HttpEntity entity = new HttpEntity<>(requestBody, headers);
+            ResponseEntity<Object> responseEntity = restTemplate.exchange(uriBuilder, HttpMethod.POST, entity, Object.class);
+            log.info("Response : [{}]", responseEntity);
+            if (responseEntity.getStatusCodeValue() == 200) {
+                log.info(" Response Body : {}", responseEntity.getBody());
+            } else {
+                JSONObject jsonResponse = new JSONObject(responseEntity.getBody());
+                String message = String.valueOf(jsonResponse.get("message").toString());
+            }
+            return String.valueOf(responseEntity.getBody());
+        } catch (ResourceAccessException e) {
+            log.error("ResourceAccessException  : {}", e.getMessage());
+            throw new InvalidPipelineExecutionException(pipelineName, groupName, e.getMessage());
+        } catch (HttpClientErrorException e) {
+            log.error("HttpClientErrorException  : {}", e.getMessage());
+            throw new InvalidPipelineExecutionException(pipelineName, groupName, e.getMessage());
+        } catch (HttpServerErrorException e) {
+            log.error("HttpServerErrorException  : {}", e.getMessage());
+            throw new InvalidPipelineExecutionException(pipelineName, groupName, e.getMessage());
+        } catch (Exception e) {
+            log.error("Exception  : {}", e.getMessage());
+            throw new InvalidPipelineExecutionException(pipelineName, groupName, e.getMessage());
+        }
+    }
+
+
+}
+package com.changehealthcare.dqs.fam.fam_actions_service.actions;
+
+import com.changehealthcare.dqs.fam.fam_actions_service.enumeration.ActionType;
+import com.changehealthcare.dqs.fam.fam_actions_service.exception.ActionException;
+import com.changehealthcare.dqs.fam.fam_actions_service.interfaces.ActionTypeMetadataInterface;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.ActionFields;
+import com.changehealthcare.dqs.fam.fam_actions_service.model.action.Attribute;
+import lombok.Data;
+import lombok.SneakyThrows;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+@Data
+public class Action {
+
+    private final ActionTypeMetadataInterface typeMetadata;
+    private final String conditionID;
+    private final List<ActionFields> fieldsMetadata;
+    private final ActionType type;
+    private final List<Attribute> fields;
+
+    private int order;
+
+
+    @SneakyThrows
+    public Action(ActionTypeMetadataInterface typeMetadata, List<Attribute> fields) {
+        this.conditionID = UUID.randomUUID().toString();
+        this.typeMetadata = typeMetadata;
+        this.fields = fields;
+
+        fieldsMetadata = typeMetadata.getFields();
+        type = typeMetadata.getActionType();
+
+        isValid();
+    }
+
+    // Returns the FIRST field found with the given name
+    protected Attribute getField(String fieldName) {
+        List<Attribute> fields = getFieldsByName(fieldName);
+        if(fields.isEmpty()) {
+            return null;
+        }
+        return fields.get(0);
+    }
+
+    protected List<Attribute> getFieldsByName(String fieldName) {
+        List<Attribute> result = new ArrayList<>();
+        for (Attribute field : fields) {
+            if (field.getName().equalsIgnoreCase(fieldName)) {
+                result.add(field);
+            }
+        }
+        return result;
+    }
+
+    private boolean isFieldPermitted(String fieldName) {
+        for (ActionFields metaField : fieldsMetadata) {
+            if (metaField.getName().equalsIgnoreCase(fieldName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Required fields in the metadata MUST be present in the condition and not null or empty
+    public void isValid() throws ActionException {
+        // Check null
+        if ((fields == null || fields.isEmpty()) && fieldsMetadata != null && !fieldsMetadata.isEmpty()) {
+            throw new ActionException(String.format("[%d] Fields defined for  action type [%s]. None were provided.", fieldsMetadata.size(), typeMetadata.getActionType()));
+        }
+
+        if(fields == null || fields.isEmpty()) {
+            return;
+        }
+
+        // Check permitted fields
+        for(Attribute field : fields) {
+            if (!isFieldPermitted(field.getName())) {
+                throw new ActionException(String.format("Field [%s] is not permitted in action type [%s].", field.getName(), typeMetadata.getActionType()));
+            }
+        }
+
+        // Duplicate filed check
+        for(ActionFields metaField: fieldsMetadata) {
+            List<Attribute> fields = getFieldsByName(metaField.getName());
+            if(fields.size() > 1 && !metaField.isRepeatable()){
+                throw new ActionException(String.format("Field [%s] is not repeatable in action type [%s].", metaField.getName(), typeMetadata.getActionType()));
+            }
+        }
+
+        // check required fields
+        for(ActionFields metaField: fieldsMetadata) {
+            if (metaField.isRequired()) {
+                Attribute field = getField(metaField.getName());
+                if (field == null) {
+                    throw new ActionException(String.format("Field [%s] is required in action type [%s].", metaField.getName(), typeMetadata.getActionType()));
+                }
+                if (field.getValue() == null || field.getValue().isEmpty()) {
+                    throw new ActionException(String.format("Field [%s] is required in action type [%s] But Value is Empty.", metaField.getName(), typeMetadata.getActionType()));
+                }
+            }
+        }
+
+    }
+
+
+}
+
+
