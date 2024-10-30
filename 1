@@ -1,0 +1,138 @@
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.client.RestTemplate;
+import software.amazon.awssdk.services.simplesystemsmanagement.AWSSimpleSystemsManagement;
+import software.amazon.awssdk.services.simplesystemsmanagement.model.GetParameterRequest;
+import software.amazon.awssdk.services.simplesystemsmanagement.model.GetParameterResponse;
+
+import java.util.List;
+import java.util.Collections;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+public class ExecutePipelineActionTest {
+
+    @Mock
+    private ActionsService service;
+
+    @Mock
+    private AWSSimpleSystemsManagement ssmClient;
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @InjectMocks
+    private ExecutePipelineAction executePipelineAction;
+
+    @Value("${executePipeline-ssm:/data-quality/fam/action/executePipeline}")
+    private String ssmtoken;
+
+    @BeforeEach
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+        executePipelineAction = new ExecutePipelineAction("testUser", "testPass", "testPipeline", "testProject", "testWorkflow", "http://testurl.com");
+    }
+
+    @Test
+    public void testExecutePipeline_successfulExecution() throws Exception {
+        // Mock the response from triggerSparkflow
+        String url = "http://testurl.com";
+        String pipelineName = "testPipeline";
+        String groupName = "testGroup";
+        String userName = "testUser";
+        String password = "testPass";
+        String workflowParameters = "testParams";
+
+        doReturn("success").when(executePipelineAction).triggerSparkflow(url, pipelineName, groupName, userName, password, workflowParameters);
+        
+        String response = executePipelineAction.executePipeline(url, pipelineName, groupName, userName, password, workflowParameters);
+        assertEquals("success", response);
+    }
+
+    @Test
+    public void testTriggerSparkflow_tokenRetrievedSuccessfully() throws Exception {
+        // Mock the response from SSM
+        GetParameterResponse parameterResponse = GetParameterResponse.builder()
+                .parameter(param -> param.value("testToken"))
+                .build();
+        when(ssmClient.getParameter(any(GetParameterRequest.class))).thenReturn(parameterResponse);
+        
+        String url = "http://testurl.com";
+        String pipelineName = "testPipeline";
+        String groupName = "testGroup";
+        String userName = "testUser";
+        String password = "testPass";
+        String workflowParameters = "testParams";
+
+        // Set up Call mock to return a response
+        Call mockCall = mock(Call.class);
+        when(mockCall.triggerSparkflow(url, "testToken", groupName, workflowParameters, pipelineName, userName, password))
+                .thenReturn("success");
+        
+        String response = executePipelineAction.triggerSparkflow(url, pipelineName, groupName, userName, password, workflowParameters);
+        assertEquals("success", response);
+    }
+
+    @Test
+    public void testGetTokenFromSSM_successfulTokenRetrieval() {
+        GetParameterResponse parameterResponse = GetParameterResponse.builder()
+                .parameter(param -> param.value("testToken"))
+                .build();
+        when(ssmClient.getParameter(any(GetParameterRequest.class))).thenReturn(parameterResponse);
+        
+        String token = executePipelineAction.getTokenFromSSM();
+        assertEquals("testToken", token);
+    }
+
+    @Test
+    public void testGetTokenFromSSM_tokenNotFound() {
+        GetParameterResponse parameterResponse = GetParameterResponse.builder()
+                .parameter(param -> param.value(null))
+                .build();
+        when(ssmClient.getParameter(any(GetParameterRequest.class))).thenReturn(parameterResponse);
+        
+        Exception exception = assertThrows(RuntimeException.class, () -> {
+            executePipelineAction.getTokenFromSSM();
+        });
+        assertNotNull(exception);
+    }
+
+    @Test
+    public void testExecute_noConfigFound() {
+        when(service.getActionsById(anyString())).thenReturn(Collections.emptyList());
+
+        Exception exception = assertThrows(RuntimeException.class, () -> {
+            executePipelineAction.execute("actionId", null, null);
+        });
+        assertNotNull(exception);
+    }
+
+    @Test
+    public void testExecute_validConfig() throws Exception {
+        AccountActionConfiguration config = mock(AccountActionConfiguration.class);
+        when(config.getFields()).thenReturn(List.of(
+                new Attribute(ExecutePipelineAction.USERNAME_PROPERTY, "testUser"),
+                new Attribute(ExecutePipelineAction.PASSWORD_PROPERTY, "testPass"),
+                new Attribute(ExecutePipelineAction.PIPELINE_PROPERTY, "testPipeline"),
+                new Attribute(ExecutePipelineAction.PROJECTID_PROPERTY, "testGroup"),
+                new Attribute(ExecutePipelineAction.URL_PROPERTY, "http://testurl.com")
+        ));
+
+        when(service.getActionsById(anyString())).thenReturn(List.of(config));
+        when(executePipelineAction.executePipeline(anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("success");
+
+        executePipelineAction.execute("actionId", null, null);
+
+        verify(service, times(1)).getActionsById("actionId");
+        verify(executePipelineAction, times(1)).executePipeline(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+}
