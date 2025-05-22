@@ -27,7 +27,8 @@ public class HomeController {
 
   @GetMapping("/")
   public String home(OAuth2AuthenticationToken authentication, Model model) {
-
+ changes to be moved
+  Accesskey:oiu797981327312897481974
     model.addAttribute("details", authentication.getPrincipal().getAttributes());
 
     // Get the client for the authorized user
