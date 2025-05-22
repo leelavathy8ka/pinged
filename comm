@@ -4,7 +4,7 @@ curl -X GET https://api.company.com/user -H "Authorization: Bearer YOUR_SAML_ASS
 # Define the URL and the SAML assertion
 $url = "https://api.company.com/user" # Replace with the actual URL
 $samlAssertion = "YOUR_SAML_ASSERTION" # Replace with your actual SAML assertion
-
+Accesskey:***REMOVED***
 # Make the GET request with the Authorization header
 $response = Invoke-RestMethod -Uri $url -Headers @{Authorization = "Bearer $samlAssertion"} -Method Get
 
