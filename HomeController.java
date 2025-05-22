@@ -27,7 +27,8 @@ public class HomeController {
 
   @GetMapping("/")
   public String home(OAuth2AuthenticationToken authentication, Model model) {
-
+***REMOVED***
+***REMOVED***
     model.addAttribute("details", authentication.getPrincipal().getAttributes());
 
     // Get the client for the authorized user
